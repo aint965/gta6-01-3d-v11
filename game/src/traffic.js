@@ -114,7 +114,7 @@ export function createTraffic(city, vehicles) {
     traffic.length = 0;
     pedestrians.length = 0;
     for (let li = 0; li < loops.length; li++) {
-      const count = 2 + intRange(rng, 0, 1);
+      const count = 3 + intRange(rng, 0, 1);
       for (let k = 0; k < count; k++) {
         const edge = intRange(rng, 0, 3);
         const s = range(rng, 0, loops[li].edges[edge].len);
@@ -132,7 +132,7 @@ export function createTraffic(city, vehicles) {
     }
     for (let li = 0; li < PED_BLOCKS.length; li++) {
       const corners = loopCorners(PED_BLOCKS[li], 14);
-      for (let k = 0; k < 4; k++) {
+      for (let k = 0; k < 8; k++) {
         const edge = intRange(rng, 0, 3);
         const e = { from: corners[edge], to: corners[(edge + 1) % 4] };
         const len = Math.hypot(e.to[0] - e.from[0], e.to[1] - e.from[1]);

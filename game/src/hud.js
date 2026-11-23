@@ -16,6 +16,9 @@ export function createHud() {
   const cash = document.getElementById('hud-cash');
   const mission = document.getElementById('hud-mission');
   const banner = document.getElementById('hud-banner');
+  const wanted = document.getElementById('hud-wanted');
+  const health = document.getElementById('hud-health');
+  const station = document.getElementById('hud-station');
 
   const CLOCK = { day: '12:00', sunset: '18:40', night: '23:15' };
 
@@ -25,6 +28,21 @@ export function createHud() {
     if (fps) fps.textContent = frameRate.toFixed(0) + ' FPS';
     if (clock) clock.textContent = CLOCK[presetName] || '12:00';
     if (cash && drive) cash.textContent = 'Cash $' + (drive.cash || 0);
+    if (wanted && drive) {
+      const stars = drive.wanted || 0;
+      wanted.textContent = stars ? '★'.repeat(stars) : '';
+      wanted.style.display = stars ? '' : 'none';
+    }
+    if (health && drive) {
+      const hp = drive.health === undefined ? 100 : drive.health;
+      health.textContent = 'Health ' + hp;
+      health.style.color = hp <= 30 ? '#e5484d' : '#7fb3c8';
+    }
+    if (station && drive) {
+      const text = drive.station || '';
+      station.textContent = text ? '♪ ' + text : '';
+      station.style.display = text ? '' : 'none';
+    }
     if (mission && drive) {
       const text = drive.objective || '';
       mission.textContent = text;

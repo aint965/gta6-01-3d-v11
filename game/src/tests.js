@@ -600,5 +600,212 @@ export function createTests(game) {
     return out;
   }
 
-  return { driveTest, headlightTest, missionTest, walkTest };
+  // ---- Stage E: police, garages, radio, density ----
+  // The police test plays mission 1 for cash, then gets busted on purpose:
+  // wanted 1, stop, wait for the arrest, and check the park recovery, the
+  // $200 penalty and the failed mission. Then it outruns a patrol car at
+  // full speed and checks the heat cools off once far away.
+  function policeTest() {
+    const out = { arrest: null, escape: null, pass: false };
+    game.resetTest();
+    game.traffic.freezeForTest();
+    game.police.enable();
+    const car = game.spawnCar('coupe', 200, 100, Math.PI, 'player');
+    game.enterCar(car);
+    // Earn $250 first (mission 1), so the penalty has something to take.
+    press('KeyM');
+    driveTo([[200, 0], [-1000, 0], [-1000, 600]]);
+    stopCar();
+    press('KeyQ');
+    driveTo([[-1000, 0], [-200, 0], [-200, -1400], [-600, -1400]]);
+    stopCar();
+    press('KeyQ');
+    const cashBefore = game.missions.cash;
+    // Accept mission 2 so the bust has a mission to fail.
+    press('KeyM');
+    game.police.setWanted(1);
+    for (let i = 0; i < 120; i++) game.step(1 / 60, NONE, []);
+    const spawned = game.police.status();
+    // Drive off, then stop and wait for the arrest.
+    for (let i = 0; i < 180; i++) game.step(1 / 60, W, []);
+    stopCar();
+    let minDist = Infinity;
+    let busted = false;
+    for (let i = 0; i < 40 * 60; i++) {
+      game.step(1 / 60, NONE, []);
+      const st = game.police.status();
+      // While driving, player.x/z are where Mara got in the car — the
+      // police chase the car, so measure to the car when there is one.
+      const pl = game.player();
+      const ppx = pl.car ? pl.car.x : pl.x;
+      const ppz = pl.car ? pl.car.z : pl.z;
+      for (const p of game.police.policeCars()) {
+        minDist = Math.min(minDist, Math.hypot(p.x - ppx, p.z - ppz));
+      }
+      if (st.busts >= 1) { busted = true; break; }
+    }
+    const after = game.police.status();
+    const p = game.player();
+    const fail = game.missions.status().failed;
+    out.arrest = {
+      cashBefore,
+      wantedAtSpawn: spawned.wanted,
+      policeAtSpawn: spawned.police,
+      minPoliceDist: +minDist.toFixed(1),
+      busted,
+      busts: after.busts,
+      cashAfter: game.missions.cash,
+      penalty: cashBefore - game.missions.cash,
+      playerAtPark: Math.abs(p.x - 0) < 25 && Math.abs(p.z - 1300) < 25,
+      playerPos: [+p.x.toFixed(1), +p.z.toFixed(1)],
+      onFoot: p.onFoot,
+      wantedAfter: after.wanted,
+      healthAfter: after.health,
+      missionFailed: fail ? fail.title : null,
+    };
+
+    // Escape: outrun the patrol car, then stay far away and watch the
+    // heat cool off. The car is moved far away (a teleport stands in for
+    // a long clean getaway); the point under test is the decay timer, not
+    // the driving — the outrun above it proves the coupe is faster.
+    game.resetTest();
+    game.traffic.freezeForTest();
+    game.police.enable();
+    const car2 = game.spawnCar('coupe', 200, 100, Math.PI, 'player');
+    game.enterCar(car2);
+    game.police.setWanted(1);
+    for (let i = 0; i < 120; i++) game.step(1 / 60, NONE, []);
+    let gapAfter12s = 0;
+    for (let i = 0; i < 12 * 60; i++) {
+      game.step(1 / 60, W, []);
+      for (const pc of game.police.policeCars()) {
+        gapAfter12s = Math.max(gapAfter12s, Math.hypot(pc.x - car2.x, pc.z - car2.z));
+      }
+    }
+    car2.x = 1600; car2.z = 1200;
+    for (let i = 0; i < 30 * 60; i++) game.step(1 / 60, NONE, []);
+    const esc = game.police.status();
+    out.escape = {
+      gapAfter12s: +gapAfter12s.toFixed(1),
+      wantedAfter30s: esc.wanted,
+      heatAfter30s: esc.heat,
+      policeAfter30s: esc.police,
+    };
+    game.resetTest();
+    out.pass = out.arrest.cashBefore === 250 &&
+      out.arrest.wantedAtSpawn === 1 &&
+      out.arrest.policeAtSpawn === 1 &&
+      out.arrest.minPoliceDist < 30 &&
+      out.arrest.busted &&
+      out.arrest.penalty === 200 &&
+      out.arrest.cashAfter === 50 &&
+      out.arrest.playerAtPark &&
+      out.arrest.onFoot &&
+      out.arrest.wantedAfter === 0 &&
+      out.arrest.healthAfter === 100 &&
+      out.arrest.missionFailed === 'Salt Ledger' &&
+      out.escape.gapAfter12s > 100 &&
+      out.escape.wantedAfter30s === 0 &&
+      out.escape.policeAfter30s === 0;
+    return out;
+  }
+
+  // The garage test: store a coupe in Old Solmar, take it back out with G,
+  // store a sedan in Pearl Marina, and check the stored car survives a
+  // mission accept and a missions reset.
+  function garageTest() {
+    const out = { store: null, retrieve: null, persist: null, padsClear: null, pass: false };
+    game.resetTest();
+    game.traffic.freezeForTest();
+    const probe = { length: 4.2, width: 1.8, heading: 0 };
+    out.padsClear = {
+      oldSolmar: game.vehicles.collidesAt(probe, -992, -600, null) === null,
+      pearlMarina: game.vehicles.collidesAt(probe, -592, -1400, null) === null,
+    };
+    const car = game.spawnCar('coupe', -992, -600, 0, 'player');
+    game.enterCar(car);
+    const carId = car.id;
+    out.store = {
+      bayAtSpawn: !!game.garages.inside(-992, -600),
+      bayName: game.garages.inside(-992, -600) ? game.garages.inside(-992, -600).name : null,
+    };
+    press('KeyE');
+    const stillThere = game.vehicles.cars.some((c) => c.id === carId);
+    out.store.storedCount = game.garages.status().count;
+    out.store.carRemoved = !stillThere;
+    out.store.onFoot = game.player().onFoot;
+    press('KeyG');
+    out.retrieve = {
+      storedCount: game.garages.status().count,
+      driving: !game.player().onFoot,
+      profile: game.player().car ? game.player().car.profile : null,
+    };
+    // Store a second car in Pearl Marina, then check persistence.
+    const old = game.player().car;
+    if (old) game.vehicles.removeCar(old);
+    game.exitCar();
+    const car2 = game.spawnCar('sedan', -592, -1400, Math.PI / 2, 'player');
+    game.enterCar(car2);
+    press('KeyE');
+    out.persist = {
+      storedAfterSecond: game.garages.status().count,
+      storedProfiles: game.garages.status().stored,
+    };
+    game.missions.accept(1);
+    out.persist.storedAfterAccept = game.garages.status().count;
+    game.missions.reset();
+    out.persist.storedAfterMissionsReset = game.garages.status().count;
+    press('KeyG');
+    out.persist.retrievedProfile = game.player().car ? game.player().car.profile : null;
+    out.persist.drivingAgain = !game.player().onFoot;
+    game.resetTest();
+    out.pass = out.padsClear.oldSolmar && out.padsClear.pearlMarina &&
+      out.store.bayAtSpawn && out.store.bayName === 'Old Solmar Garage' &&
+      out.store.storedCount === 1 && out.store.carRemoved && out.store.onFoot &&
+      out.retrieve.storedCount === 0 && out.retrieve.driving && out.retrieve.profile === 'coupe' &&
+      out.persist.storedAfterSecond === 1 && out.persist.storedProfiles[0] === 'sedan' &&
+      out.persist.storedAfterAccept === 1 && out.persist.storedAfterMissionsReset === 1 &&
+      out.persist.retrievedProfile === 'sedan' && out.persist.drivingAgain;
+    return out;
+  }
+
+  // The radio test: the three stations cycle by name, with or without
+  // sound (headless Chrome has no gesture, so audio may stay locked —
+  // switching is what the game promises).
+  function radioTest() {
+    const out = { stations: null, cycle: [], pass: false };
+    game.resetTest();
+    out.stations = game.radio.stations();
+    out.cycle.push(game.radio.station());
+    out.cycle.push(game.radio.next());
+    out.cycle.push(game.radio.next());
+    out.cycle.push(game.radio.next());
+    out.cycle.push(game.radio.next());
+    out.pass = out.stations.length === 3 &&
+      out.stations[0] === 'Solmar FM' &&
+      out.stations[1] === 'Canal Drive' &&
+      out.stations[2] === 'Sunstrand Nights' &&
+      out.cycle[0] === 'Solmar FM' &&
+      out.cycle[1] === 'Canal Drive' &&
+      out.cycle[2] === 'Sunstrand Nights' &&
+      out.cycle[3] === 'Solmar FM' &&
+      out.cycle[4] === 'Canal Drive';
+    game.resetTest();
+    return out;
+  }
+
+  // The density check: more traffic and twice the pedestrians, counted
+  // after a fresh reset, plus ten seconds of live traffic with no errors.
+  function densityCheck() {
+    const out = { traffic: 0, pedestrians: 0, pass: false };
+    game.resetTest();
+    out.traffic = game.traffic.traffic.length;
+    out.pedestrians = game.traffic.pedestrians.length;
+    for (let i = 0; i < 600; i++) game.step(1 / 60, NONE, []);
+    out.pass = out.traffic >= 18 && out.pedestrians === 40;
+    game.resetTest();
+    return out;
+  }
+
+  return { driveTest, headlightTest, missionTest, walkTest, policeTest, garageTest, radioTest, densityCheck };
 }

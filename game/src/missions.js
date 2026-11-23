@@ -255,6 +255,20 @@ export function createMissions(deps) {
     active = null;
   }
 
+  // Stage E: the police end a run — the active mission fails, the cash
+  // penalty comes out of the total, and a banner says what happened.
+  function failActive(reason) {
+    if (active) failMission(reason);
+  }
+
+  function deductCash(n) {
+    const d = Math.min(cash, n);
+    cash -= d;
+    return d;
+  }
+
+  function notify(text) { setBanner(text); }
+
   function advanceStep() {
     // A step that buys time (a witnessed plot) pushes the mission clock
     // back before the next step starts.
@@ -510,6 +524,9 @@ export function createMissions(deps) {
     bannerText,
     reset,
     stageFinale,
+    failActive,
+    deductCash,
+    notify,
     status() {
       return {
         cash,

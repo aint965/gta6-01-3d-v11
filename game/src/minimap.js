@@ -71,11 +71,11 @@ export function createMinimap(canvas, city) {
     ctx.stroke();
     ctx.restore();
     // Cars: the player's car is coral with a pale ring, traffic is pale,
-    // parked cars are dim. A 3-pixel square at this scale is a car. A
-    // pursuer tailing the player is red.
+    // parked cars are dim, police are blue. A 3-pixel square at this scale
+    // is a car. A pursuer tailing the player is red.
     for (const car of cars) {
       const isPlayer = player && car === player.car;
-      ctx.fillStyle = car.pursuer ? '#e5484d' : isPlayer ? '#d77f69' : car.kind === 'traffic' ? '#ead8b2' : 'rgba(234,216,178,0.45)';
+      ctx.fillStyle = car.pursuer ? '#e5484d' : car.police ? '#5aa9e6' : isPlayer ? '#d77f69' : car.kind === 'traffic' ? '#ead8b2' : 'rgba(234,216,178,0.45)';
       const cx = sx(car.x), cy = sz(car.z);
       ctx.fillRect(cx - 2, cy - 2, 4, 4);
       if (isPlayer) {

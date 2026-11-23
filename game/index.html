@@ -30,6 +30,9 @@
     bottom: 14px; right: 14px; font-size: 22px; font-weight: 800; letter-spacing: 1px;
   }
   #hud-cash { font-size: 14px; font-weight: 700; color: #7fb3c8; margin-top: 2px; }
+  #hud-wanted { font-size: 16px; font-weight: 800; color: #e5484d; letter-spacing: 2px; }
+  #hud-health { font-size: 13px; color: #7fb3c8; }
+  #hud-station { font-size: 13px; color: #d77f69; font-style: italic; }
   #hud-mission {
     top: 14px; left: 50%; transform: translateX(-50%); font-size: 14px; font-weight: 600;
     max-width: 46vw; text-align: center;
@@ -52,6 +55,9 @@
   <div id="hud-district">Canal Ward</div>
   <div><span id="hud-clock">12:00</span> &middot; <span id="hud-preset">Midday</span></div>
   <div id="hud-cash">Cash $0</div>
+  <div id="hud-wanted"></div>
+  <div id="hud-health">Health 100</div>
+  <div id="hud-station"></div>
 </div>
 <div id="hud-mission" class="panel"></div>
 <div id="hud-banner" class="panel"></div>
@@ -60,7 +66,7 @@
 <div id="hud-help" class="panel">
   <b>WASD</b> move / drive &nbsp; <b>Drag</b> look &nbsp; <b>Wheel</b> zoom<br>
   <b>E</b> get in / out of a car &nbsp; <b>H</b> headlights &nbsp; <b>M</b> start mission<br>
-  <b>Q</b> interact &nbsp; <b>X</b> drop cargo &nbsp; <b>1 / 2 / 3</b> midday / sunset / night &nbsp; <b>T</b> cycle light
+  <b>Q</b> interact &nbsp; <b>X</b> drop cargo &nbsp; <b>R</b> radio &nbsp; <b>G</b> garage &nbsp; <b>1 / 2 / 3</b> midday / sunset / night &nbsp; <b>T</b> cycle light
 </div>
 <div id="hud-speed" class="panel"></div>
 <div id="hud-prompt" class="panel"></div>

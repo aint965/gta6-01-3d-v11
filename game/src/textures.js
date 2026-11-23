@@ -125,8 +125,10 @@ export function makeGroundTexture(city) {
     ctx.stroke();
   }
 
-  // Roads: asphalt with a pale centre line.
-  ctx.fillStyle = '#3f444b';
+  // Roads: asphalt with a pale centre line. The asphalt is a mid grey,
+  // not near-black: at #3f444b it rendered as a black band against the
+  // pale limestone, which read as a shadow stripe rather than a road.
+  ctx.fillStyle = '#565a60';
   for (const s of city.streets) {
     if (s.axis === 'x') ctx.fillRect(px(s.at - 10), 0, pw(20), S);
     else ctx.fillRect(0, pz(s.at - 10), S, pw(20));

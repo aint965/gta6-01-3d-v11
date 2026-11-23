@@ -205,8 +205,19 @@ void main() {
   if (uUseShadow > 0.5) {
     vec3 lp = vLightPos.xyz / vLightPos.w * 0.5 + 0.5;
     if (lp.x > 0.0 && lp.x < 1.0 && lp.y > 0.0 && lp.y < 1.0) {
-      float depth = texture(uShadow, lp.xy).r;
-      shadow = (lp.z - 0.0015 < depth) ? 1.0 : 0.5;
+      // A 3x3 PCF over the 2048 shadow map: one texel is ~0.54 world
+      // units, so a single tap leaves a jagged hard edge on roads and
+      // sidewalks. Nine taps soften the edge, and the shadow floor is
+      // 0.68 instead of 0.5, so shade reads as shade, not a black hole.
+      float texel = 1.0 / 2048.0;
+      float lit = 0.0;
+      for (int i = -1; i <= 1; i++) {
+        for (int j = -1; j <= 1; j++) {
+          float depth = texture(uShadow, lp.xy + vec2(float(i), float(j)) * texel).r;
+          lit += (lp.z - 0.0015 < depth) ? 1.0 : 0.0;
+        }
+      }
+      shadow = 0.68 + 0.32 * (lit / 9.0);
     }
   }
   vec3 color = base * (uAmbient + uSunColor * diff * shadow) + uSunColor * spec * shadow;
@@ -524,6 +535,16 @@ export function createRenderer(canvas, city) {
     const crate = new Builder();
     crate.flatBox(0, 0.45, 0, 1.1, 0.9, 1.1);
     dynMeshes.crate = crate.build(gl);
+    // Stage E: a police light bar (one mesh, drawn twice with red and blue
+    // emissive tints, alternating) and a garage bay — a low slab with a
+    // back wall, drawn teal at each garage spot.
+    const policeBar = new Builder();
+    policeBar.flatBox(0, 0, 0, 0.55, 0.28, 0.45);
+    dynMeshes.policeBar = policeBar.build(gl);
+    const garagePad = new Builder();
+    garagePad.flatBox(0, 0.15, 0, 16, 0.3, 24);
+    garagePad.flatBox(0, 2, -11.7, 16, 4, 0.6);
+    dynMeshes.garagePad = garagePad.build(gl);
   }
 
   const facadeTex = {};

@@ -23,6 +23,9 @@ import { createVehicleSystem, PROFILES } from './vehicles.js';
 import { createTraffic } from './traffic.js';
 import { createMissions } from './missions.js';
 import { createTests } from './tests.js';
+import { createPolice } from './police.js';
+import { createGarages, GARAGES } from './garages.js';
+import { createRadio } from './radio.js';
 
 // Staged screenshot views: street and promenade level, never from above.
 // The camera sits on a street at about head height, looking down it, so
@@ -89,6 +92,20 @@ const SHOTS = {
     eye: [-1200, 7, -1290],
     target: [-1200, 6, -1400],
   },
+  // Stage E: a police pursuit at night — the coupe on the Canal Ward
+  // street at 23:15 with two patrol cars closing in behind it, wanted
+  // two stars, their light bars flashing. The camera sits low and to the
+  // side so the patrol cars stay in frame.
+  'police-pursuit': {
+    preset: 'night',
+    drive: true,
+    police: true,
+    car: { profile: 'coupe', x: 200, z: 300, heading: 0 },
+    dist: 18,
+    pitch: 0.3,
+    eye: [168, 7, 276],
+    target: [200, 2, 330],
+  },
 };
 
 window.__palkon = { errors: [], ready: false, shots: Object.keys(SHOTS) };
@@ -129,6 +146,40 @@ const missions = createMissions({
   now: () => simTime,
   setPreset,
 });
+// Stage E: the police, the garages and the radio. The police need the
+// player and the missions; the busted handler below owns the recovery.
+const garages = createGarages({ vehicles });
+const radio = createRadio();
+const police = createPolice({
+  vehicles,
+  missions,
+  getPlayerPos: () => (player.car ? [player.car.x, player.car.z] : [player.x, player.z]),
+  getPlayerCar: () => player.car,
+  isPlayerOnFoot: () => player.onFoot,
+  onBusted: ({ wanted }) => {
+    // Arrest or zero health: the mission fails, the police take a cut of
+    // the cash (never more than Mara has), and she wakes up in the park.
+    const penalty = missions.deductCash(100 + 100 * wanted);
+    if (missions.activeId) missions.failActive('Busted by the police');
+    if (player.car) {
+      player.car.kind = 'parked';
+      player.car = null;
+    }
+    player.onFoot = true;
+    driving = false;
+    followOnFoot = true;
+    player.x = 0; player.z = 1300; player.heading = 0;
+    headlightsOn = false;
+    camera.target = [player.x, 10, player.z];
+    missions.notify('BUSTED — the police took $' + penalty + '. You wake up in Solmar Park.');
+    police.acknowledgeBusted();
+  },
+});
+// The radio only starts after a gesture (browser autoplay rules); the
+// station still switches without sound.
+const unlockAudio = () => radio.unlock();
+window.addEventListener('keydown', unlockAudio, { once: true });
+window.addEventListener('pointerdown', unlockAudio, { once: true });
 let headlightsOn = false;
 let camYawOffset = 0; // mouse drag while driving: look around, springs back
 let driving = false;
@@ -180,8 +231,16 @@ function step(dt, held, pressed) {
           if (camera.pitch < 0.15) camera.pitch = 0.3;
         }
       } else if (player.car) {
-        vehicles.leaveCar(player.car, player);
-        player.car.kind = 'parked';
+        const car = player.car;
+        vehicles.leaveCar(car, player);
+        // Stage E: a car left in a garage bay is stored, not parked on
+        // the street — take it back out with G.
+        if (garages.inside(car.x, car.z)) {
+          garages.store(car);
+          missions.notify(car.name + ' stored in the garage.');
+        } else {
+          car.kind = 'parked';
+        }
         player.car = null;
         player.onFoot = true;
         followOnFoot = true;
@@ -194,6 +253,21 @@ function step(dt, held, pressed) {
     if (code === 'KeyM') missions.accept();
     if (code === 'KeyQ') missions.interact();
     if (code === 'KeyX') missions.dropCargo();
+    if (code === 'KeyR' && !player.onFoot) radio.next();
+    if (code === 'KeyG' && player.onFoot) {
+      const bay = garages.inside(player.x, player.z);
+      const stored = bay && garages.retrieve();
+      if (stored) {
+        const car = vehicles.makeCar(stored.profile, bay.x, bay.z, bay.heading, 'player');
+        car.color = stored.color;
+        player.car = car;
+        player.onFoot = false;
+        followOnFoot = false;
+        driving = true;
+        if (camera.dist > 40) camera.dist = 18;
+        if (camera.pitch < 0.15) camera.pitch = 0.3;
+      }
+    }
   }
   if (player.onFoot) {
     // Stage D: WASD walks Mara on the ground, relative to the camera, and
@@ -238,15 +312,22 @@ function step(dt, held, pressed) {
     }
     if (followOnFoot) camera.target = [player.x, 10, player.z];
   } else if (player.car) {
-    // The drive model takes throttle/brake/steer, not key codes.
-    vehicles.driveCar(player.car, dt, {
+    // The drive model takes throttle/brake/steer, not key codes. A hard
+    // hit (blocked while fast) hurts: the police count it as reckless.
+    const speedBefore = Math.abs(player.car.speed);
+    const blocked = vehicles.driveCar(player.car, dt, {
       throttle: held.has('KeyW') || held.has('ArrowUp'),
       brake: held.has('KeyS') || held.has('ArrowDown'),
       steer: (held.has('KeyD') || held.has('ArrowRight') ? 1 : 0) -
         (held.has('KeyA') || held.has('ArrowLeft') ? 1 : 0),
     });
+    if (blocked && speedBefore > 15) {
+      police.damage(12);
+      police.addHeat(20);
+    }
   }
   traffic.update(dt, simTime, player.car);
+  police.update(dt);
   missions.update(dt);
   // Chase camera: sit behind the car, look past it, and let the mouse
   // drag the view around while the car keeps its heading. The yaw,
@@ -285,6 +366,11 @@ if (shot) {
     // missions.stageFinale); every other shot accepts the next mission.
     if (shot.finale) missions.stageFinale();
     else missions.accept(shot.mission);
+  }
+  if (shot.police) {
+    // Two stars, two patrol cars closing in behind the coupe.
+    police.enable();
+    police.setWanted(2);
   }
 } else {
   setPreset(params.get('preset') || 'day');
@@ -373,6 +459,29 @@ function queueDynamic(time) {
       tint: [0.22, 0.56, 0.6], emissiveTint: [0.22, 0.56, 0.6], shininess: 8,
     });
   }
+  // Stage E: the garage bays — teal slabs with a back wall at each spot.
+  for (const g of GARAGES) {
+    R.queueDynamic(R.dynMeshes.garagePad, R.model(g.x, 0.1, g.z, g.heading), {
+      tint: [0.22, 0.56, 0.6], shininess: 8,
+    });
+  }
+  // Stage E: police light bars. Two small boxes on the roof, red left and
+  // blue right, swapping every third of a second so the bar flashes.
+  const barPhase = Math.floor(simTime * 3) % 2 === 0;
+  const red = [1, 0.1, 0.08], blue = [0.1, 0.3, 1];
+  for (const car of police.policeCars()) {
+    const c = Math.cos(car.heading), s = Math.sin(car.heading);
+    for (const [side, on] of [[-0.45, barPhase], [0.45, !barPhase]]) {
+      const bx = car.x + side * c;
+      const bz = car.z - side * s;
+      const tint = side < 0 ? red : blue;
+      R.queueDynamic(R.dynMeshes.policeBar, R.model(bx, car.y + 1.5, bz, car.heading), {
+        tint: on ? tint : [0.15, 0.15, 0.16],
+        emissiveTint: on ? tint : [0, 0, 0],
+        shininess: 2,
+      });
+    }
+  }
 }
 
 // Model matrix for a signal lamp: the head is rotated by `heading` around
@@ -431,6 +540,9 @@ const game = {
     vehicles.reset();
     traffic.reset();
     missions.reset();
+    police.reset(); // the police are off in tests unless a test opts in
+    garages.reset();
+    radio.reset();
     // Stage D: Mara starts on the x = 200 street, not in the canal — the
     // old (0, 200) spawn sat in the water at x = 0.
     player.x = 200; player.z = 200; player.heading = 0;
@@ -479,6 +591,9 @@ const game = {
   traffic,
   vehicles,
   missions,
+  police,
+  garages,
+  radio,
 };
 const tests = createTests(game);
 window.__palkon.step = step;
@@ -491,11 +606,19 @@ window.__palkon.state = () => ({
   headlightsOn,
   preset: presetName,
   missions: missions.status(),
+  wanted: police.status().wanted,
+  health: police.status().health,
+  station: radio.station(),
+  garageStored: garages.status().count,
 });
 window.__palkon.runDriveTest = () => tests.driveTest();
 window.__palkon.runHeadlightTest = (haze) => tests.headlightTest(haze);
 window.__palkon.runMissionTest = () => tests.missionTest();
 window.__palkon.runWalkTest = () => tests.walkTest();
+window.__palkon.runPoliceTest = () => tests.policeTest();
+window.__palkon.runGarageTest = () => tests.garageTest();
+window.__palkon.runRadioTest = () => tests.radioTest();
+window.__palkon.runDensityCheck = () => tests.densityCheck();
 function resize() {
   renderer.resize(window.innerWidth, window.innerHeight);
 }
@@ -530,6 +653,15 @@ function frame(now) {
       : 'E — Get out · H — Headlights ' + (headlightsOn ? 'on' : 'off');
     if (prompt && drivePrompt) prompt += ' · ' + drivePrompt;
     else if (!prompt) prompt = drivePrompt;
+    // Stage E: the garage prompt when standing in a bay with a stored car.
+    if (player.onFoot) {
+      const bay = garages.inside(player.x, player.z);
+      if (bay && garages.status().count > 0) {
+        const next = garages.status().stored[garages.status().count - 1];
+        const gp = 'G — Take the ' + next + ' from the garage';
+        prompt = prompt ? prompt + ' · ' + gp : gp;
+      }
+    }
     hud.update(camera, presetName, fps, {
       speedKmh: player.car ? Math.abs(player.car.speed) * 3.6 : 0,
       profile: player.car ? player.car.profile : null,
@@ -540,6 +672,9 @@ function frame(now) {
       objective: missions.objectiveText(),
       banner: missions.bannerText(),
       prompt,
+      wanted: police.status().wanted,
+      health: police.status().health,
+      station: radio.isPlaying() ? radio.station() : null,
     });
     hudTime = now;
   }
