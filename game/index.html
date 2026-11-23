@@ -29,6 +29,15 @@
   #hud-speed {
     bottom: 14px; right: 14px; font-size: 22px; font-weight: 800; letter-spacing: 1px;
   }
+  #hud-cash { font-size: 14px; font-weight: 700; color: #7fb3c8; margin-top: 2px; }
+  #hud-mission {
+    top: 14px; left: 50%; transform: translateX(-50%); font-size: 14px; font-weight: 600;
+    max-width: 46vw; text-align: center;
+  }
+  #hud-banner {
+    top: 34%; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: 800;
+    letter-spacing: 0.5px; text-align: center; max-width: 60vw;
+  }
   #hud-prompt {
     bottom: 64px; left: 50%; transform: translateX(-50%); font-size: 14px; font-weight: 600;
   }
@@ -42,13 +51,16 @@
   <div id="hud-sub">The Solmar Story</div>
   <div id="hud-district">Canal Ward</div>
   <div><span id="hud-clock">12:00</span> &middot; <span id="hud-preset">Midday</span></div>
+  <div id="hud-cash">Cash $0</div>
 </div>
+<div id="hud-mission" class="panel"></div>
+<div id="hud-banner" class="panel"></div>
 <div id="hud-fps" class="panel">-- FPS</div>
 <div id="minimap-wrap"><canvas id="minimap" width="220" height="198"></canvas></div>
 <div id="hud-help" class="panel">
   <b>WASD</b> move / drive &nbsp; <b>Drag</b> look &nbsp; <b>Wheel</b> zoom<br>
-  <b>E</b> get in / out of a car &nbsp; <b>H</b> headlights<br>
-  <b>1 / 2 / 3</b> midday / sunset / night &nbsp; <b>T</b> cycle light
+  <b>E</b> get in / out of a car &nbsp; <b>H</b> headlights &nbsp; <b>M</b> start mission<br>
+  <b>Q</b> interact &nbsp; <b>X</b> drop cargo &nbsp; <b>1 / 2 / 3</b> midday / sunset / night &nbsp; <b>T</b> cycle light
 </div>
 <div id="hud-speed" class="panel"></div>
 <div id="hud-prompt" class="panel"></div>

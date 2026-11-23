@@ -516,6 +516,14 @@ export function createRenderer(canvas, city) {
     const sigLamp = new Builder();
     sigLamp.flatBox(0, 0, 0, 0.55, 0.55, 0.2);
     dynMeshes.sigLamp = sigLamp.build(gl);
+    // Stage C: the mission marker — a tall beam over the objective, and a
+    // small crate for cargo dropped on the street.
+    const marker = new Builder();
+    marker.cylinder(0, 13, 0, 0.8, 26, 8);
+    dynMeshes.marker = marker.build(gl);
+    const crate = new Builder();
+    crate.flatBox(0, 0.45, 0, 1.1, 0.9, 1.1);
+    dynMeshes.crate = crate.build(gl);
   }
 
   const facadeTex = {};

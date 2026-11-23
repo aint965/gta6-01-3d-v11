@@ -90,6 +90,23 @@ export function buildCity(seed = CITY_SEED) {
   for (const x of vStreets) streets.push({ axis: 'x', at: x });
   for (const z of hStreets) streets.push({ axis: 'z', at: z });
 
+  // A tree standing on a road is a defect no driver can see around: the
+  // road strip is 10 wide, a tree is 0.9 in radius and a car 0.9
+  // half-wide, so trees stay 13 off every street centreline.
+  const onStreet = (x, z) =>
+    vStreets.some((sx) => Math.abs(x - sx) < 13) ||
+    hStreets.some((sz) => Math.abs(z - sz) < 13);
+  // Roll a tree position inside a rectangle until it lands off every
+  // street strip, so no tree ever stands in a road.
+  function treeSpot(x0, x1, z0, z1) {
+    let x, z;
+    do {
+      x = range(rng, x0, x1);
+      z = range(rng, z0, z1);
+    } while (onStreet(x, z));
+    return { x, z };
+  }
+
   // Blocks are the cells between neighbouring streets, plus the edge strips.
   const xEdges = [CITY.minX, ...vStreets, CITY.maxX];
   const zEdges = [CITY.minZ, ...hStreets, CITY.maxZ];
@@ -187,31 +204,23 @@ export function buildCity(seed = CITY_SEED) {
   }
 
   // Trees: the park is dense, Citrus Quarter lines its streets, the beach
-  // has palms, Old Solmar keeps a few around its plaza.
+  // has palms, Old Solmar keeps a few around its plaza. Every spot is
+  // rolled off the street strips (see treeSpot above).
   for (let k = 0; k < 150; k++) {
-    trees.push({
-      x: range(rng, PARK.x0 + 20, PARK.x1 - 20),
-      z: range(rng, PARK.z0 + 20, PARK.z1 - 20),
-      s: range(rng, 0.8, 1.4), kind: 'oak',
-    });
+    const { x, z } = treeSpot(PARK.x0 + 20, PARK.x1 - 20, PARK.z0 + 20, PARK.z1 - 20);
+    trees.push({ x, z, s: range(rng, 0.8, 1.4), kind: 'oak' });
   }
   for (let k = 0; k < 60; k++) {
-    trees.push({
-      x: range(rng, 760, 1750), z: range(rng, -160, 860),
-      s: range(rng, 0.7, 1.2), kind: 'citrus',
-    });
+    const { x, z } = treeSpot(760, 1750, -160, 860);
+    trees.push({ x, z, s: range(rng, 0.7, 1.2), kind: 'citrus' });
   }
   for (let k = 0; k < 36; k++) {
-    trees.push({
-      x: range(rng, 1640, 1900), z: range(rng, 940, 1700),
-      s: range(rng, 0.9, 1.3), kind: 'palm',
-    });
+    const { x, z } = treeSpot(1640, 1900, 940, 1700);
+    trees.push({ x, z, s: range(rng, 0.9, 1.3), kind: 'palm' });
   }
   for (let k = 0; k < 10; k++) {
-    trees.push({
-      x: range(rng, -1400, -900), z: range(rng, -800, -300),
-      s: range(rng, 0.8, 1.2), kind: 'oak',
-    });
+    const { x, z } = treeSpot(-1400, -900, -800, -300);
+    trees.push({ x, z, s: range(rng, 0.8, 1.2), kind: 'oak' });
   }
 
   // Street lamps at every other intersection, plus the marina promenade

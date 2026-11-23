@@ -14,7 +14,7 @@ export function createMinimap(canvas, city) {
   const sx = (x) => ((x + 1920) / 3840) * W;
   const sz = (z) => ((z + 1728) / 3456) * H;
 
-  function draw(camera, cars, player) {
+  function draw(camera, cars, player, marker) {
     ctx.fillStyle = '#142d38';
     ctx.fillRect(0, 0, W, H);
     // District tints.
@@ -71,10 +71,11 @@ export function createMinimap(canvas, city) {
     ctx.stroke();
     ctx.restore();
     // Cars: the player's car is coral with a pale ring, traffic is pale,
-    // parked cars are dim. A 3-pixel square at this scale is a car.
+    // parked cars are dim. A 3-pixel square at this scale is a car. A
+    // pursuer tailing the player is red.
     for (const car of cars) {
       const isPlayer = player && car === player.car;
-      ctx.fillStyle = isPlayer ? '#d77f69' : car.kind === 'traffic' ? '#ead8b2' : 'rgba(234,216,178,0.45)';
+      ctx.fillStyle = car.pursuer ? '#e5484d' : isPlayer ? '#d77f69' : car.kind === 'traffic' ? '#ead8b2' : 'rgba(234,216,178,0.45)';
       const cx = sx(car.x), cy = sz(car.z);
       ctx.fillRect(cx - 2, cy - 2, 4, 4);
       if (isPlayer) {
@@ -89,6 +90,22 @@ export function createMinimap(canvas, city) {
       ctx.beginPath();
       ctx.arc(sx(player.x), sz(player.z), 2.5, 0, Math.PI * 2);
       ctx.fill();
+    }
+    // The mission objective: a pulsing coral diamond.
+    if (marker) {
+      const mx = sx(marker[0]), my = sz(marker[1]);
+      const pulse = 1 + 0.25 * Math.sin(performance.now() / 300);
+      ctx.fillStyle = '#d77f69';
+      ctx.strokeStyle = '#ead8b2';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(mx, my - 7 * pulse);
+      ctx.lineTo(mx + 5 * pulse, my);
+      ctx.lineTo(mx, my + 7 * pulse);
+      ctx.lineTo(mx - 5 * pulse, my);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
     }
     // Frame.
     ctx.strokeStyle = '#ead8b2';

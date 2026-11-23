@@ -103,11 +103,15 @@ export function createVehicleSystem(city) {
     buildings.push(item);
     grid.insertAABB(item.x0, item.z0, item.x1, item.z1, item);
   }
-  // Bridge rails: thin walls at the deck edges, so a car cannot drive off
-  // the side of a bridge into the canal.
+  // Bridge rails: thin walls along the deck's long sides, so a car cannot
+  // drive off the side of a bridge into the canal. They run east-west at
+  // z = bridge +/- 20, the deck's edges — the entrances at x = +/-110
+  // stay open. (As first written they stood north-south across the
+  // entrances at x = +/-108 and sealed every bridge shut: a car driving
+  // west down z = 0 stopped dead at x = 112.)
   for (const br of BRIDGES) {
-    for (const sx of [-108, 108]) {
-      const item = { kind: 'aabb', x0: sx - 2, z0: br.z - 20, x1: sx + 2, z1: br.z + 20 };
+    for (const sz of [-20, 20]) {
+      const item = { kind: 'aabb', x0: -108, z0: br.z + sz - 2, x1: 108, z1: br.z + sz + 2 };
       grid.insertAABB(item.x0, item.z0, item.x1, item.z1, item);
     }
   }

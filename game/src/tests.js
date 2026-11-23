@@ -185,5 +185,264 @@ export function createTests(game) {
     return result;
   }
 
-  return { driveTest, headlightTest };
+  // ---- Stage C: mission playthroughs ----
+  // A pure-pursuit driver: steer at a lookahead point on the current leg
+  // instead of at the far waypoint. Steering at the far waypoint lets the
+  // car drift wide off the street centreline and clip lamp posts at
+  // intersections; the lookahead point, 40 units ahead on the leg, pulls
+  // it back onto the centreline within a few dozen units of travel.
+  // Waypoints sit on street centre lines, so the path never has to cross
+  // a block — but a turn taken fast swings wide off the road and wedges
+  // the car against a building face (the turn radius grows with speed),
+  // so the driver slows to a crawl before any sharp corner and recovers
+  // by reversing out if it still gets stuck.
+  function driveTo(targets, opts = {}) {
+    const car = game.player().car;
+    if (!car) return { reached: false, reason: 'not in a car' };
+    const lookahead = opts.lookahead || 40;
+    const radius = opts.radius || 8;
+    const maxSteps = (opts.maxSeconds || 180) * 60;
+    let wi = 0;
+    let steps = 0;
+    let lastX = car.x, lastZ = car.z, stuckSteps = 0, reversing = 0;
+    // Sigma-delta steering: the keys are binary, so a fractional steer
+    // command is spread over steps (D on a fraction of them). That keeps
+    // the heading error tiny on straights — with plain on/off steering the
+    // car weaves, and the speed cap below would hold it slow everywhere.
+    let steerAcc = 0;
+    // The leg the car is on starts where the drive begins.
+    let legStart = [car.x, car.z];
+    while (wi < targets.length && steps < maxSteps) {
+      if (opts.done && opts.done()) return { reached: true, done: true, steps, seconds: +(steps / 60).toFixed(1) };
+      const [tx, tz] = targets[wi];
+      const dx = tx - car.x, dz = tz - car.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < radius) { legStart = targets[wi]; wi++; continue; }
+      // The turn waiting at this waypoint: the angle between this leg and
+      // the next one. A sharp corner needs a slow approach.
+      let turn = 0;
+      if (wi + 1 < targets.length) {
+        const [nx, nz] = targets[wi + 1];
+        const a1 = Math.atan2(dx, dz);
+        const a2 = Math.atan2(nx - tx, nz - tz);
+        turn = a2 - a1;
+        while (turn > Math.PI) turn -= Math.PI * 2;
+        while (turn < -Math.PI) turn += Math.PI * 2;
+      }
+      // Pure pursuit: project the car onto the leg, then steer at the
+      // point `lookahead` ahead of the projection, clamped to the leg end.
+      const [ax, az] = legStart;
+      const abx = tx - ax, abz = tz - az;
+      const abLen = Math.hypot(abx, abz) || 1;
+      const ux = abx / abLen, uz = abz / abLen;
+      let along = (car.x - ax) * ux + (car.z - az) * uz;
+      along = Math.max(0, Math.min(along + lookahead, abLen));
+      const px = ax + ux * along, pz = az + uz * along;
+      const desired = Math.atan2(px - car.x, pz - car.z);
+      let err = desired - car.heading;
+      while (err > Math.PI) err -= Math.PI * 2;
+      while (err < -Math.PI) err += Math.PI * 2;
+      const speed = Math.abs(car.speed);
+      // Speed follows the heading error: fast only while aligned. A car
+      // that accelerates mid-turn swings wide off the road and wedges
+      // against a building face, so a large error holds it to a crawl —
+      // a turn of 70 deg or more still to make runs at 3 m/s, where a
+      // U-turn's arc stays on the road instead of bulging into the block.
+      let want = Math.min(36, dist * 0.3 + 5);
+      if (Math.abs(turn) > 0.35 && dist < 60) want = Math.min(want, 5);
+      else if (dist < 30) want = Math.min(want, 12);
+      want = Math.min(want, 3 + 30 * Math.max(0, 1.2 - Math.abs(err)));
+      const codes = new Set();
+      if (reversing > 0) {
+        // Back out of the wedge, steering the other way.
+        codes.add('KeyS');
+        if (err > 0) codes.add('KeyA');
+        else codes.add('KeyD');
+        reversing--;
+      } else {
+        if (speed < want) codes.add('KeyW');
+        else if (speed > want + 2) codes.add('KeyS');
+        steerAcc += Math.max(-1, Math.min(1, err * 2.0));
+        if (steerAcc >= 0.5) { codes.add('KeyD'); steerAcc -= 1; }
+        else if (steerAcc <= -0.5) { codes.add('KeyA'); steerAcc += 1; }
+      }
+      game.step(1 / 60, codes, []);
+      steps++;
+      // Stuck detection: barely moved in 3 s of driving means the car is
+      // wedged against something; reverse out for 1.5 s.
+      if (steps % 180 === 0) {
+        if (Math.hypot(car.x - lastX, car.z - lastZ) < 1 && reversing === 0) {
+          stuckSteps++;
+          reversing = 90;
+        }
+        lastX = car.x; lastZ = car.z;
+      }
+    }
+    return {
+      reached: wi >= targets.length,
+      steps,
+      seconds: +(steps / 60).toFixed(1),
+      stuckRecoveries: stuckSteps,
+      finalDist: wi < targets.length
+        ? +Math.hypot(targets[wi][0] - car.x, targets[wi][1] - car.z).toFixed(1)
+        : 0,
+    };
+  }
+
+  function stopCar(maxSteps = 240) {
+    const car = game.player().car;
+    if (!car) return;
+    for (let i = 0; i < maxSteps; i++) {
+      if (Math.abs(car.speed) < 0.5) break;
+      game.step(1 / 60, S, []);
+    }
+  }
+
+  function press(code) {
+    game.step(1 / 60, NONE, [code]);
+  }
+
+  function missionTest() {
+    const out = { missions: [], totalCash: 0, dropTest: null, timerFailTest: null, pass: false };
+    game.resetTest();
+    game.traffic.freezeForTest();
+    // A coupe on the x = 200 street, facing north. Routes below stay on
+    // street centre lines and cross the canal only on the z = 0 bridge:
+    // the x = 0 "street" is the canal itself, and horizontal streets cross
+    // the water nowhere else.
+    const car = game.spawnCar('coupe', 200, 100, Math.PI, 'player');
+    game.enterCar(car);
+
+    // Mission 1: pick up in South Market, deliver to Pearl Marina.
+    press('KeyM');
+    const m1 = { id: 1, title: 'A Receipt for Sunshine' };
+    m1.markerAtAccept = game.missions.marker();
+    m1.objectiveAtAccept = game.missions.status().active
+      ? game.missions.status().active.label : null;
+    m1.toPickup = driveTo([[200, 0], [-1000, 0], [-1000, 600]]);
+    stopCar();
+    press('KeyQ');
+    m1.pickedUp = game.missions.status().active
+      ? game.missions.status().active.carrying : null;
+    // Cargo drop: X leaves the package on the street; the marker moves to
+    // it and Q picks it back up before the job can finish.
+    press('KeyX');
+    const droppedAt = game.missions.status().active
+      ? game.missions.status().active.dropped : null;
+    out.dropTest = {
+      dropped: droppedAt,
+      markerAtCargo: game.missions.marker(),
+    };
+    press('KeyQ');
+    out.dropTest.repicked = game.missions.status().active
+      ? game.missions.status().active.carrying : null;
+    m1.toDeliver = driveTo([[-1000, 0], [-200, 0], [-200, -1400], [-600, -1400]]);
+    stopCar();
+    press('KeyQ');
+    m1.done = game.missions.status().completed.includes(1);
+    m1.cash = game.missions.cash;
+    out.missions.push(m1);
+
+    // Mission 2: the ledger, with a 120 s timed leg after pickup.
+    press('KeyM');
+    const m2 = { id: 2, title: 'Salt Ledger' };
+    m2.toPickup = driveTo([[-200, -1400], [-200, 0], [200, 0], [200, -200]]);
+    stopCar();
+    press('KeyQ');
+    m2.pickedUp = game.missions.status().active
+      ? game.missions.status().active.carrying : null;
+    m2.toDeliver = driveTo([[200, 0], [-200, 0], [-200, -600], [-1200, -600]]);
+    stopCar();
+    press('KeyQ');
+    m2.done = game.missions.status().completed.includes(2);
+    m2.cash = game.missions.cash;
+    // The timed leg is the drive from pickup to delivery: it must fit
+    // inside the 120 s the mission allows.
+    m2.timedLegSeconds = m2.toDeliver.seconds;
+    out.missions.push(m2);
+
+    // Mission 3: three shutters in Citrus Quarter, 240 s from accept.
+    press('KeyM');
+    const m3 = { id: 3, title: 'After the Shutters' };
+    m3.toShop1 = driveTo([[-200, -600], [-200, 0], [800, 0]]);
+    stopCar();
+    press('KeyQ');
+    m3.toShop2 = driveTo([[1200, 0], [1200, 400]]);
+    stopCar();
+    press('KeyQ');
+    m3.toShop3 = driveTo([[1200, 800], [1600, 800]]);
+    stopCar();
+    press('KeyQ');
+    m3.done = game.missions.status().completed.includes(3);
+    m3.cash = game.missions.cash;
+    out.missions.push(m3);
+
+    // Mission 4: deliver the payment (carried from accept), then lose the
+    // tail. The pursuer starts 35 units behind and tops out at 28 m/s
+    // against the coupe's 36, so the escape is a long straight: the car
+    // runs west down z = -600, gaining ~8 m/s on the tail, and the gap
+    // clears 110 well before the first corner. (A short route with an
+    // early turn fails: the car brakes for the corner while the tail,
+    // which cuts corners, does not, and the gap never reaches 110.)
+    press('KeyM');
+    const m4 = { id: 4, title: 'Glass Debt' };
+    m4.carryingAtAccept = game.missions.status().active
+      ? game.missions.status().active.carrying : null;
+    m4.toDeliver = driveTo([[1600, -600], [1200, -600]]);
+    stopCar();
+    press('KeyQ');
+    m4.pursuerSpawned = game.missions.status().active
+      ? !!game.missions.status().active.pursuer : false;
+    m4.escape = driveTo([[-1400, -600], [-1400, 200]], {
+      maxSeconds: 70,
+      done: () => game.missions.status().active === null,
+    });
+    m4.done = game.missions.status().completed.includes(4);
+    m4.cash = game.missions.cash;
+    m4.pursuerLeft = !game.vehicles.cars.some((c) => c.pursuer);
+    out.missions.push(m4);
+
+    out.totalCash = game.missions.cash;
+
+    // Failure path: play missions 1 and 2 up to the ledger pickup, then
+    // idle past the 120 s leg and confirm the mission fails.
+    game.resetTest();
+    game.traffic.freezeForTest();
+    const car2 = game.spawnCar('coupe', 200, 100, Math.PI, 'player');
+    game.enterCar(car2);
+    press('KeyM');
+    driveTo([[200, 0], [-1000, 0], [-1000, 600]]);
+    stopCar();
+    press('KeyQ');
+    driveTo([[-1000, 0], [-200, 0], [-200, -1400], [-600, -1400]]);
+    stopCar();
+    press('KeyQ');
+    press('KeyM');
+    driveTo([[-200, -1400], [-200, 0], [200, 0], [200, -200]]);
+    stopCar();
+    press('KeyQ');
+    for (let i = 0; i < 130 * 60; i++) game.step(1 / 60, NONE, []);
+    const failStatus = game.missions.status();
+    out.timerFailTest = {
+      failed: failStatus.failed,
+      activeAfterFail: failStatus.active,
+      cashUnchanged: failStatus.cash === 250,
+    };
+    // A failed mission can be retried: M accepts it again.
+    press('KeyM');
+    out.timerFailTest.retryAccepted = game.missions.status().active !== null &&
+      game.missions.status().active.id === 2;
+
+    game.resetTest();
+    out.pass = out.missions.every((m) => m.done) &&
+      out.totalCash === 1800 &&
+      out.dropTest.repicked === 'package' &&
+      out.timerFailTest.failed !== null &&
+      out.timerFailTest.failed.title === 'Salt Ledger' &&
+      out.timerFailTest.cashUnchanged &&
+      out.timerFailTest.retryAccepted;
+    return out;
+  }
+
+  return { driveTest, headlightTest, missionTest };
 }

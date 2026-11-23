@@ -18,6 +18,7 @@ import { createHud } from './hud.js';
 import { PRESET_ORDER } from './lighting.js';
 import { createVehicleSystem, PROFILES } from './vehicles.js';
 import { createTraffic } from './traffic.js';
+import { createMissions } from './missions.js';
 import { createTests } from './tests.js';
 
 // Staged screenshot views: street and promenade level, never from above.
@@ -56,6 +57,19 @@ const SHOTS = {
     eye: [216, 5, 258],
     target: [198, 2, 330],
   },
+  // Stage C: mission 1 in progress — the coupe on the South Market street
+  // with the coral marker beam over the package pickup.
+  'mission-1': {
+    preset: 'day',
+    drive: true,
+    mission: 1,
+    car: { profile: 'coupe', x: -1000, z: 500, heading: 0 },
+    // A longer chase distance so the whole marker beam fits in frame.
+    dist: 30,
+    pitch: 0.25,
+    eye: [-1000, 6, 470],
+    target: [-1000, 4, 600],
+  },
 };
 
 window.__palkon = { errors: [], ready: false, shots: Object.keys(SHOTS) };
@@ -89,6 +103,12 @@ const player = {
   onFoot: true,
   car: null,
 };
+const missions = createMissions({
+  vehicles,
+  getPos: () => (player.car ? [player.car.x, player.car.z] : [player.x, player.z]),
+  getHeading: () => (player.car ? player.car.heading : player.heading),
+  now: () => simTime,
+});
 let headlightsOn = false;
 let camYawOffset = 0; // mouse drag while driving: look around, springs back
 let driving = false;
@@ -145,6 +165,9 @@ function step(dt, held, pressed) {
       }
     }
     if (code === 'KeyH') headlightsOn = !headlightsOn;
+    if (code === 'KeyM') missions.accept();
+    if (code === 'KeyQ') missions.interact();
+    if (code === 'KeyX') missions.dropCargo();
   }
   if (player.onFoot) {
     let fwd = 0, strafe = 0;
@@ -163,6 +186,7 @@ function step(dt, held, pressed) {
     });
   }
   traffic.update(dt, simTime, player.car);
+  missions.update(dt);
   // Chase camera: sit behind the car, look past it, and let the mouse
   // drag the view around while the car keeps its heading. The yaw,
   // pitch and distance are set directly — placing the camera would feed
@@ -194,7 +218,8 @@ if (shot) {
     }
   }
   camera.place(shot.eye, shot.target);
-  if (shot.drive) { camera.dist = 18; camera.pitch = 0.3; }
+  if (shot.drive) { camera.dist = shot.dist || 18; camera.pitch = shot.pitch !== undefined ? shot.pitch : 0.3; }
+  if (shot.mission) missions.accept(shot.mission);
 } else {
   setPreset(params.get('preset') || 'day');
   const cam = params.get('cam');
@@ -257,6 +282,20 @@ function queueDynamic(time) {
       }
     }
   }
+  // Stage C: the mission marker beam over the current objective, and the
+  // dropped-cargo crate where the player left it.
+  const mark = missions.marker();
+  if (mark) {
+    R.queueDynamic(R.dynMeshes.marker, R.model(mark[0], 0, mark[1], 0), {
+      tint: [0.84, 0.5, 0.41], emissiveTint: [0.84, 0.5, 0.41], shininess: 2,
+    });
+  }
+  const crate = missions.cratePoint();
+  if (crate) {
+    R.queueDynamic(R.dynMeshes.crate, R.model(crate[0], 0, crate[1], 0), {
+      tint: [0.22, 0.56, 0.6], emissiveTint: [0.22, 0.56, 0.6], shininess: 8,
+    });
+  }
 }
 
 // Model matrix for a signal lamp: the head is rotated by `heading` around
@@ -314,6 +353,7 @@ const game = {
   resetTest() {
     vehicles.reset();
     traffic.reset();
+    missions.reset();
     player.x = 0; player.z = 200; player.heading = 0;
     player.onFoot = true; player.car = null;
     driving = false;
@@ -349,6 +389,7 @@ const game = {
   },
   traffic,
   vehicles,
+  missions,
 };
 const tests = createTests(game);
 window.__palkon.step = step;
@@ -360,9 +401,11 @@ window.__palkon.state = () => ({
   pedestrians: traffic.pedestrians.length,
   headlightsOn,
   preset: presetName,
+  missions: missions.status(),
 });
 window.__palkon.runDriveTest = () => tests.driveTest();
 window.__palkon.runHeadlightTest = (haze) => tests.headlightTest(haze);
+window.__palkon.runMissionTest = () => tests.missionTest();
 function resize() {
   renderer.resize(window.innerWidth, window.innerHeight);
 }
@@ -387,14 +430,26 @@ function frame(now) {
   const pressed = input.takePressed();
   step(dt, input.keys, pressed);
   renderFrame(now / 1000);
-  minimap.draw(camera, vehicles.cars, player);
+  minimap.draw(camera, vehicles.cars, player, missions.marker());
   if (now - hudTime >= 250) {
+    // The prompt line combines the mission hints (Q/X) with the driving
+    // hints (E/H) so the player always sees what they can do here.
+    let prompt = missions.prompt();
+    const drivePrompt = player.onFoot
+      ? (vehicles.nearestCar(player.x, player.z, 6) ? 'E — Get in the car' : '')
+      : 'E — Get out · H — Headlights ' + (headlightsOn ? 'on' : 'off');
+    if (prompt && drivePrompt) prompt += ' · ' + drivePrompt;
+    else if (!prompt) prompt = drivePrompt;
     hud.update(camera, presetName, fps, {
       speedKmh: player.car ? Math.abs(player.car.speed) * 3.6 : 0,
       profile: player.car ? player.car.profile : null,
       onFoot: player.onFoot,
       headlightsOn,
       nearCar: player.onFoot && !!vehicles.nearestCar(player.x, player.z, 6),
+      cash: missions.cash,
+      objective: missions.objectiveText(),
+      banner: missions.bannerText(),
+      prompt,
     });
     hudTime = now;
   }
