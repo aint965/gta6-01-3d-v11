@@ -49,6 +49,7 @@ const SHOTS = {
   'drive-day': {
     preset: 'day',
     drive: true,
+    cruise: true,
     car: { profile: 'coupe', x: 200, z: 300, heading: 0 },
     eye: [200, 4.5, 266],
     target: [200, 2, 330],
@@ -56,6 +57,7 @@ const SHOTS = {
   'night-pursuit': {
     preset: 'night',
     drive: true,
+    cruise: true,
     car: { profile: 'coupe', x: 200, z: 300, heading: 0 },
     // The pursued car, ahead in the lane and slightly right: the
     // player's headlights catch its paint in the shot.
@@ -99,12 +101,22 @@ const SHOTS = {
   'police-pursuit': {
     preset: 'night',
     drive: true,
+    cruise: true,
     police: true,
     car: { profile: 'coupe', x: 200, z: 300, heading: 0 },
     dist: 18,
     pitch: 0.3,
     eye: [168, 7, 276],
     target: [200, 2, 330],
+  },
+  // Stage F: the title screen — Solmar at sunset, traffic moving, the
+  // title over the living city. The camera sits on the marina
+  // promenade looking down the bay street.
+  title: {
+    preset: 'sunset',
+    title: true,
+    eye: [-700, 9, -1420],
+    target: [-1300, 10, -1520],
   },
 };
 
@@ -180,12 +192,31 @@ const police = createPolice({
 const unlockAudio = () => radio.unlock();
 window.addEventListener('keydown', unlockAudio, { once: true });
 window.addEventListener('pointerdown', unlockAudio, { once: true });
+// Stage F: clicking the title screen starts the game, same as Enter.
+document.getElementById('title-screen').addEventListener('click', startGame);
 let headlightsOn = false;
 let camYawOffset = 0; // mouse drag while driving: look around, springs back
 let driving = false;
 let followOnFoot = false; // once Mara has walked, the camera stays with her
 const WALK_SPEED = 6; // metres per second on foot
 let simTime = 0; // simulation clock: drives the signal cycle and the tests
+
+// Stage F: the title screen. The game opens on Solmar at sunset with
+// traffic moving and the HUD hidden; Enter (or a click on the title)
+// starts the game at midday with Mara on foot. Staged drive shots roll
+// instead of sitting parked: shotAutoDrive holds the throttle for them.
+let titleActive = false;
+let shotAutoDrive = false;
+function startGame() {
+  if (!titleActive) return;
+  titleActive = false;
+  document.body.classList.remove('title');
+  setPreset('day');
+  player.x = 200; player.z = 200; player.heading = 0;
+  player.onFoot = true; player.car = null;
+  driving = false; followOnFoot = false;
+  camera.place([-60, 16, 260], [0, 12, -120]);
+}
 
 const minimap = createMinimap(document.getElementById('minimap'), city);
 const hud = createHud();
@@ -346,15 +377,25 @@ function setSignalsGreen(on) {
   traffic.setAllGreen(on);
 }
 
-// Stage the camera from the URL, or start on the canal bridge at midday.
+// Stage the camera from the URL, or start on the title screen at sunset.
 const shot = SHOTS[params.get('shot') || ''];
 if (shot) {
   setPreset(shot.preset);
+  if (shot.title) {
+    titleActive = true;
+    document.body.classList.add('title');
+  }
   if (shot.drive) {
     const car = vehicles.makeCar(shot.car.profile, shot.car.x, shot.car.z, shot.car.heading, 'player');
     player.car = car;
     player.onFoot = false;
     driving = true;
+    if (shot.cruise) {
+      // A staged drive shot shows the car moving, not parked: rolling
+      // speed now, and the frame loop holds the throttle for it.
+      car.speed = 18;
+      shotAutoDrive = true;
+    }
     if (shot.pursuer) {
       vehicles.makeCar(shot.pursuer.profile, shot.pursuer.x, shot.pursuer.z, shot.pursuer.heading, 'traffic');
     }
@@ -368,18 +409,37 @@ if (shot) {
     else missions.accept(shot.mission);
   }
   if (shot.police) {
-    // Two stars, two patrol cars closing in behind the coupe.
+    // Two stars, two patrol cars closing in behind the coupe. Warm the
+    // world a few steps so the patrol cars spawn, then pull the nearest
+    // one into the lane ahead of the player car: behind the chase
+    // camera it would never be seen, but ahead it sits in the
+    // headlight beam with its light bar flashing.
     police.enable();
     police.setWanted(2);
+    for (let i = 0; i < 3; i++) step(0.05, new Set(), []);
+    const pcs = police.policeCars();
+    if (pcs.length > 0) {
+      const near = pcs[0];
+      near.x = shot.car.x + 2; near.z = shot.car.z + 30;
+      near.heading = shot.car.heading; near.speed = 8;
+    }
   }
 } else {
-  setPreset(params.get('preset') || 'day');
   const cam = params.get('cam');
   const tgt = params.get('target');
   if (cam && tgt) {
+    setPreset(params.get('preset') || 'day');
     camera.place(cam.split(',').map(Number), tgt.split(',').map(Number));
-  } else {
+  } else if (params.get('test')) {
+    setPreset(params.get('preset') || 'day');
     camera.place([-60, 16, 260], [0, 12, -120]);
+  } else {
+    // Stage F: the game opens on the title screen — Solmar at sunset,
+    // traffic moving, HUD hidden until Enter.
+    setPreset('sunset');
+    camera.place([-700, 9, -1420], [-1300, 10, -1520]);
+    titleActive = true;
+    document.body.classList.add('title');
   }
 }
 if (params.get('haze') === 'off') renderer.setHazeEnabled(false);
@@ -599,6 +659,7 @@ const tests = createTests(game);
 window.__palkon.step = step;
 window.__palkon.game = game; // debug interface: the tests drive this world
 window.__palkon.state = () => ({
+  title: titleActive,
   player: { x: player.x, z: player.z, onFoot: player.onFoot, car: player.car ? player.car.id : null },
   cars: vehicles.cars.length,
   traffic: traffic.traffic.length,
@@ -619,6 +680,7 @@ window.__palkon.runPoliceTest = () => tests.policeTest();
 window.__palkon.runGarageTest = () => tests.garageTest();
 window.__palkon.runRadioTest = () => tests.radioTest();
 window.__palkon.runDensityCheck = () => tests.densityCheck();
+window.__palkon.startTitle = startGame;
 function resize() {
   renderer.resize(window.innerWidth, window.innerHeight);
 }
@@ -641,8 +703,32 @@ function frame(now) {
     fpsTime = now;
   }
   const pressed = input.takePressed();
-  step(dt, input.keys, pressed);
+  if (titleActive) {
+    // The living-city title: the world runs and traffic moves, the
+    // player idles, and the camera drifts slowly across the sunset
+    // street. Enter starts the game; the HUD stays hidden until then.
+    if (pressed.includes('Enter') || pressed.includes('NumpadEnter')) startGame();
+    step(dt, new Set(), []);
+    camera.yaw += dt * 0.012;
+  } else {
+    const held = new Set(input.keys);
+    if (shotAutoDrive) held.add('KeyW'); // staged drive shots keep rolling
+    step(dt, held, pressed);
+  }
   renderFrame(now / 1000);
+  if (titleActive) {
+    if (!window.__palkon.ready) {
+      window.__palkon.ready = true;
+      const eyeNow = camera.eye();
+      document.getElementById('status').textContent =
+        'DBG eye=' + eyeNow.map((v) => v.toFixed(1)).join(',') +
+        ' target=' + camera.target.map((v) => v.toFixed(1)).join(',') +
+        ' yaw=' + camera.yaw.toFixed(3) + ' pitch=' + camera.pitch.toFixed(3) +
+        ' dist=' + camera.dist.toFixed(1) + ' preset=' + presetName;
+    }
+    requestAnimationFrame(frame);
+    return;
+  }
   minimap.draw(camera, vehicles.cars, player, missions.marker());
   if (now - hudTime >= 250) {
     // The prompt line combines the mission hints (Q/X) with the driving

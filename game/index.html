@@ -45,10 +45,43 @@
     bottom: 64px; left: 50%; transform: translateX(-50%); font-size: 14px; font-weight: 600;
   }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* Stage F: the title screen. The game opens on Solmar at sunset with
+     traffic moving behind the title; the HUD stays hidden until the
+     player starts. The overlay itself is pointer-transparent except for
+     a click, so the city stays visible around the lettering. */
+  #title-screen {
+    display: none; position: fixed; inset: 0; z-index: 10;
+    flex-direction: column; align-items: center; justify-content: center;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    text-align: center; cursor: pointer;
+    background: linear-gradient(to bottom, rgba(20,45,56,0.18) 0%, rgba(20,45,56,0) 34%, rgba(20,45,56,0) 62%, rgba(20,45,56,0.55) 100%);
+  }
+  body.title #title-screen { display: flex; }
+  body.title .panel, body.title #minimap-wrap { display: none !important; }
+  #title-kicker { font-size: 13px; letter-spacing: 5px; text-transform: uppercase; color: #7fb3c8; text-shadow: 0 2px 8px rgba(0,0,0,0.7); }
+  #title-name {
+    font-size: 84px; font-weight: 900; letter-spacing: 10px; line-height: 1;
+    color: #ead8b2; text-shadow: 0 4px 24px rgba(0,0,0,0.75); margin: 14px 0 4px;
+  }
+  #title-name .accent { color: #d77f69; }
+  #title-sub { font-size: 20px; letter-spacing: 8px; text-transform: uppercase; color: #d77f69; text-shadow: 0 2px 10px rgba(0,0,0,0.7); }
+  #title-rule { width: 220px; height: 3px; background: #d77f69; margin: 26px 0 22px; border-radius: 2px; box-shadow: 0 2px 8px rgba(0,0,0,0.6); }
+  #title-prompt { font-size: 18px; font-weight: 700; letter-spacing: 3px; color: #ead8b2; text-shadow: 0 2px 8px rgba(0,0,0,0.8); animation: title-blink 1.6s ease-in-out infinite; }
+  @keyframes title-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  #title-foot { position: absolute; bottom: 26px; left: 0; right: 0; font-size: 13px; letter-spacing: 1px; color: #c9d6d2; text-shadow: 0 2px 8px rgba(0,0,0,0.8); }
+  #title-foot b { color: #ead8b2; }
 </style>
 </head>
 <body>
 <canvas id="game" aria-label="Palkon Auto: an open-world crime game in the coastal city of Solmar"></canvas>
+<div id="title-screen">
+  <div id="title-kicker">An original open-world crime game</div>
+  <div id="title-name">PALKON <span class="accent">AUTO</span></div>
+  <div id="title-sub">The Solmar Story</div>
+  <div id="title-rule"></div>
+  <div id="title-prompt">PRESS ENTER TO START</div>
+  <div id="title-foot">8 missions &middot; Drive &middot; Police &middot; Garages &middot; Radio &nbsp;&mdash;&nbsp; <b>WASD</b> move / drive &nbsp; <b>E</b> get in / out &nbsp; <b>M</b> missions &nbsp; <b>1 / 2 / 3</b> midday / sunset / night</div>
+</div>
 <div id="hud-top" class="panel">
   <div id="hud-title">PALKON AUTO</div>
   <div id="hud-sub">The Solmar Story</div>
