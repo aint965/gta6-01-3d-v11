@@ -61,6 +61,21 @@ function normalize3(v) {
   const l = Math.hypot(v[0], v[1], v[2]) || 1;
   return [v[0] / l, v[1] / l, v[2] / l];
 }
+const IDENTITY = mat4Identity();
+// Model matrix for a dynamic object: translate, then rotate about Y so
+// local +z (the object's forward) maps to (sin h, cos h) in the world.
+function mat4Model(x, y, z, heading) {
+  const c = Math.cos(heading), s = Math.sin(heading);
+  const o = mat4Identity();
+  o[0] = c; o[2] = -s;
+  o[8] = s; o[10] = c;
+  o[12] = x; o[13] = y; o[14] = z;
+  return o;
+}
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
 
 // ---- mesh builder: accumulate boxes, cylinders, cones and planes ----
 class Builder {
@@ -155,11 +170,11 @@ const STANDARD_VERT = `#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
-uniform mat4 uProj, uView, uLight;
+uniform mat4 uProj, uView, uLight, uModel;
 out vec3 vNormal; out vec3 vWorld; out vec2 vUV; out vec4 vLightPos;
 void main() {
-  vec4 world = vec4(aPos, 1.0);
-  vWorld = aPos; vNormal = aNormal; vUV = aUV;
+  vec4 world = uModel * vec4(aPos, 1.0);
+  vWorld = world.xyz; vNormal = mat3(uModel) * aNormal; vUV = aUV;
   vLightPos = uLight * world;
   gl_Position = uProj * uView * world;
 }`;
@@ -174,6 +189,8 @@ uniform vec3 uFogColor; uniform float uFogDensity;
 uniform float uUseTexture; uniform float uWindowGlow; uniform float uShininess;
 uniform sampler2D uShadow; uniform float uUseShadow;
 uniform vec3 uCamPos;
+uniform vec3 uHeadPos[4]; uniform vec3 uHeadDir[4]; uniform float uHeadOn[4];
+uniform vec3 uHeadColor;
 out vec4 fragColor;
 void main() {
   vec3 base = uTint;
@@ -196,6 +213,26 @@ void main() {
   vec3 emissive = uEmissiveTint * uWindowGlow;
   if (uUseTexture > 0.5) emissive += texture(uEmissive, vUV).rgb * uWindowGlow;
   color += emissive;
+  // Headlights: world-space spot cones. Each light adds a pool of warm
+  // light on everything inside its cone — road, paint, people, walls —
+  // plus extra diffuse on surfaces facing the beam. The pool term is
+  // normal-independent on purpose: a headlight at bumper height lights
+  // the road and the roof of the car ahead, which a pure Lambert term
+  // at a grazing angle would leave dark.
+  for (int i = 0; i < 4; i++) {
+    if (uHeadOn[i] < 0.5) continue;
+    vec3 toLight = uHeadPos[i] - vWorld;
+    float dist = length(toLight);
+    if (dist > 80.0) continue;
+    vec3 L2 = toLight / dist;
+    float cosAng = dot(-L2, uHeadDir[i]);
+    float spot = smoothstep(0.80, 0.90, cosAng);
+    if (spot < 0.01) continue;
+    float atten = 1.0 - dist / 80.0;
+    atten *= atten;
+    float diff2 = max(dot(n, L2), 0.0);
+    color += uHeadColor * spot * atten * (base * 2.0 + 0.18 + base * diff2 * 1.5);
+  }
   float dist = distance(uCamPos, vWorld);
   float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);
   color = mix(color, uFogColor, clamp(fog, 0.0, 1.0));
@@ -275,8 +312,8 @@ void main() {
 
 const DEPTH_VERT = `#version 300 es
 layout(location = 0) in vec3 aPos;
-uniform mat4 uLight;
-void main() { gl_Position = uLight * vec4(aPos, 1.0); }`;
+uniform mat4 uLight, uModel;
+void main() { gl_Position = uLight * uModel * vec4(aPos, 1.0); }`;
 
 const DEPTH_FRAG = `#version 300 es
 precision highp float;
@@ -435,6 +472,52 @@ export function createRenderer(canvas, city) {
   for (const [key, b] of Object.entries(facadeMeshes)) meshes['facade_' + key] = b.build(gl);
   for (const [kind, b] of Object.entries(canopyByKind)) meshes['canopy_' + kind] = b.build(gl);
 
+  // ---- dynamic meshes: cars, people, signals (drawn per frame) ----
+  // Local space: forward is +z, the object sits on y = 0.
+  const dynMeshes = {};
+  {
+    const carSizes = {
+      compact: { l: 3.6, w: 1.7 },
+      sedan: { l: 4.2, w: 1.8 },
+      van: { l: 4.8, w: 2.0 },
+      coupe: { l: 4.0, w: 1.8 },
+    };
+    for (const [name, s] of Object.entries(carSizes)) {
+      const body = new Builder();
+      // Body: low slab with a cabin on top; the cabin roof is the painted
+      // surface the headlights catch on the car ahead.
+      body.flatBox(0, 0.35, 0, s.w, 0.55, s.l);
+      body.flatBox(0, 0.9, -s.l * 0.06, s.w * 0.82, 0.5, s.l * 0.52);
+      dynMeshes['car_' + name] = body.build(gl);
+      const wheels = new Builder();
+      for (const wx of [-s.w / 2 + 0.15, s.w / 2 - 0.15]) {
+        for (const wz of [-s.l / 2 + 0.7, s.l / 2 - 0.7]) {
+          // The tyre bottom touches the ground (y = 0), so the car sits
+          // on its wheels instead of floating above them.
+          wheels.flatBox(wx, 0, wz, 0.3, 0.6, 0.62);
+        }
+      }
+      dynMeshes['wheels_' + name] = wheels.build(gl);
+    }
+    const pedBody = new Builder();
+    pedBody.flatBox(0, 0.85, 0, 0.52, 0.62, 0.3); // torso
+    pedBody.flatBox(0, 1.5, 0, 0.34, 0.34, 0.34); // head
+    dynMeshes.pedBody = pedBody.build(gl);
+    const pedLegs = new Builder();
+    pedLegs.flatBox(-0.13, 0, 0, 0.2, 0.85, 0.24);
+    pedLegs.flatBox(0.13, 0, 0, 0.2, 0.85, 0.24);
+    dynMeshes.pedLegs = pedLegs.build(gl);
+    const sigPole = new Builder();
+    sigPole.cylinder(0, 0, 0, 0.18, 6.5, 6);
+    dynMeshes.sigPole = sigPole.build(gl);
+    const sigHead = new Builder();
+    sigHead.flatBox(0, 6.6, 0, 0.9, 2.2, 0.6);
+    dynMeshes.sigHead = sigHead.build(gl);
+    const sigLamp = new Builder();
+    sigLamp.flatBox(0, 0, 0, 0.55, 0.55, 0.2);
+    dynMeshes.sigLamp = sigLamp.build(gl);
+  }
+
   const facadeTex = {};
   for (const [key, pair] of Object.entries(facades)) {
     facadeTex[key] = {
@@ -479,7 +562,29 @@ export function createRenderer(canvas, city) {
     camPos: [0, 40, 120],
     camTarget: [0, 10, 0],
     time: 0,
+    haze: true,
+    headPos: new Float32Array(12),
+    headDir: new Float32Array(12),
+    headOn: new Float32Array(4),
+    headColor: [1.0, 0.88, 0.62],
+    dynamic: [],
+    lastProj: null,
+    lastView: null,
   };
+
+  // Uniform locations, cached: the static draws call this every frame, and
+  // the dynamic queue adds many more draws, so lookups happen once.
+  const locCache = new Map();
+  function loc(prog, name) {
+    const key = prog.__id + ':' + name;
+    let l = locCache.get(key);
+    if (l === undefined) {
+      l = gl.getUniformLocation(prog, name);
+      locCache.set(key, l);
+    }
+    return l;
+  }
+  stdProg.__id = 1; waterProg.__id = 2; skyProg.__id = 3; depthProg.__id = 4;
 
   function bindTextureUnit(unit, tex) {
     gl.activeTexture(gl.TEXTURE0 + unit);
@@ -494,24 +599,29 @@ export function createRenderer(canvas, city) {
   function setStdUniforms(proj, view, lightMatrix, camPos, opts) {
     gl.useProgram(stdProg);
     const set = (name, fn) => {
-      const loc = gl.getUniformLocation(stdProg, name);
-      if (loc) fn(loc);
+      const l = loc(stdProg, name);
+      if (l) fn(l);
     };
     set('uProj', (l) => gl.uniformMatrix4fv(l, false, proj));
     set('uView', (l) => gl.uniformMatrix4fv(l, false, view));
     set('uLight', (l) => gl.uniformMatrix4fv(l, false, lightMatrix));
+    set('uModel', (l) => gl.uniformMatrix4fv(l, false, opts.model || IDENTITY));
     set('uCamPos', (l) => gl.uniform3fv(l, camPos));
     set('uSunColor', (l) => gl.uniform3fv(l, state.preset.sunColor));
     set('uSunDir', (l) => gl.uniform3fv(l, state.preset.sunDir));
     set('uAmbient', (l) => gl.uniform3fv(l, state.preset.ambient));
     set('uFogColor', (l) => gl.uniform3fv(l, state.preset.fogColor));
-    set('uFogDensity', (l) => gl.uniform1f(l, state.preset.fogDensity));
+    set('uFogDensity', (l) => gl.uniform1f(l, state.haze ? state.preset.fogDensity : 0));
     set('uWindowGlow', (l) => gl.uniform1f(l, state.preset.windowGlow));
     set('uTint', (l) => gl.uniform3fv(l, opts.tint));
     set('uEmissiveTint', (l) => gl.uniform3fv(l, opts.emissiveTint || [0, 0, 0]));
     set('uUseTexture', (l) => gl.uniform1f(l, opts.useTexture ? 1 : 0));
     set('uShininess', (l) => gl.uniform1f(l, opts.shininess || 8));
     set('uUseShadow', (l) => gl.uniform1f(l, opts.useShadow === false ? 0 : 1));
+    set('uHeadPos', (l) => gl.uniform3fv(l, state.headPos));
+    set('uHeadDir', (l) => gl.uniform3fv(l, state.headDir));
+    set('uHeadOn', (l) => gl.uniform1fv(l, state.headOn));
+    set('uHeadColor', (l) => gl.uniform3fv(l, state.headColor));
     bindTextureUnit(0, opts.diffuse || whiteTex);
     bindTextureUnit(1, opts.emissive || blackTex);
     bindTextureUnit(2, shadowTex);
@@ -525,13 +635,20 @@ export function createRenderer(canvas, city) {
     gl.viewport(0, 0, SHADOW_SIZE, SHADOW_SIZE);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.useProgram(depthProg);
-    const loc = gl.getUniformLocation(depthProg, 'uLight');
-    gl.uniformMatrix4fv(loc, false, lightMatrix);
+    const lightLoc = loc(depthProg, 'uLight');
+    gl.uniformMatrix4fv(lightLoc, false, lightMatrix);
+    const modelLoc = loc(depthProg, 'uModel');
     gl.enable(gl.DEPTH_TEST);
+    const drawInto = (mesh, model) => {
+      if (modelLoc) gl.uniformMatrix4fv(modelLoc, false, model || IDENTITY);
+      drawMesh(depthProg, mesh);
+    };
     for (const key of Object.keys(meshes)) {
       if (key === 'water' || key === 'sky' || key === 'pool') continue;
-      drawMesh(depthProg, meshes[key]);
+      drawInto(meshes[key]);
     }
+    // Cars, people and signal poles cast shadows too.
+    for (const d of state.dynamic) drawInto(d.mesh, d.model);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
@@ -541,6 +658,8 @@ export function createRenderer(canvas, city) {
     const aspect = w / h;
     const proj = mat4Perspective((62 * Math.PI) / 180, aspect, 0.5, 9000);
     const view = mat4LookAt(state.camPos, state.camTarget, [0, 1, 0]);
+    state.lastProj = proj;
+    state.lastView = view;
     const p = state.preset;
     const L = normalize3([-p.sunDir[0], -p.sunDir[1], -p.sunDir[2]]);
     const target = state.camTarget;
@@ -609,6 +728,15 @@ export function createRenderer(canvas, city) {
       tint: [0.9, 0.85, 0.7], useTexture: false, shininess: 4,
       emissiveTint: [1.0, 0.72, 0.35],
     });
+    // Dynamic objects queued this frame (cars, people, signals), each
+    // with its own model matrix and tint.
+    for (const d of state.dynamic) {
+      std(d.mesh, {
+        tint: d.tint, useTexture: false, shininess: d.shininess || 12,
+        emissiveTint: d.emissiveTint || [0, 0, 0], model: d.model,
+        useShadow: d.useShadow === false ? false : true,
+      });
+    }
     // Lamp light pools: additive discs, visible only when the lamps glow.
     if (p.lampGlow > 0.01) {
       gl.enable(gl.BLEND);
@@ -655,5 +783,45 @@ export function createRenderer(canvas, city) {
     camera() { return { pos: state.camPos, target: state.camTarget }; },
     render,
     resize(w, h) { canvas.width = w; canvas.height = h; },
+    // Stage B: dynamic objects and headlights.
+    dynMeshes,
+    model: mat4Model,
+    hexToRgb,
+    beginFrame() { state.dynamic.length = 0; },
+    queueDynamic(mesh, model, opts) {
+      state.dynamic.push({ mesh, model, ...opts });
+    },
+    setHazeEnabled(on) { state.haze = !!on; },
+    setHeadlights(list) {
+      state.headOn.fill(0);
+      for (let i = 0; i < Math.min(4, list.length); i++) {
+        const l = list[i];
+        if (!l.on) continue;
+        state.headPos[i * 3] = l.pos[0];
+        state.headPos[i * 3 + 1] = l.pos[1];
+        state.headPos[i * 3 + 2] = l.pos[2];
+        const d = normalize3(l.dir);
+        state.headDir[i * 3] = d[0];
+        state.headDir[i * 3 + 1] = d[1];
+        state.headDir[i * 3 + 2] = d[2];
+        state.headOn[i] = 1;
+      }
+    },
+    // Project a world point to canvas pixels [x, y, behind].
+    projectPoint(p) {
+      if (!state.lastProj || !state.lastView) return [0, 0, true];
+      const vp = mat4Multiply(state.lastProj, state.lastView);
+      const x = p[0], y = p[1], z = p[2];
+      const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+      const cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+      const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+      if (cw <= 0) return [0, 0, true];
+      const nx = cx / cw, ny = cy / cw;
+      return [
+        (nx * 0.5 + 0.5) * canvas.width,
+        (0.5 - ny * 0.5) * canvas.height,
+        false,
+      ];
+    },
   };
 }

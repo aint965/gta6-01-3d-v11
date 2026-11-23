@@ -14,7 +14,7 @@ export function createMinimap(canvas, city) {
   const sx = (x) => ((x + 1920) / 3840) * W;
   const sz = (z) => ((z + 1728) / 3456) * H;
 
-  function draw(camera) {
+  function draw(camera, cars, player) {
     ctx.fillStyle = '#142d38';
     ctx.fillRect(0, 0, W, H);
     // District tints.
@@ -70,6 +70,26 @@ export function createMinimap(canvas, city) {
     ctx.fill();
     ctx.stroke();
     ctx.restore();
+    // Cars: the player's car is coral with a pale ring, traffic is pale,
+    // parked cars are dim. A 3-pixel square at this scale is a car.
+    for (const car of cars) {
+      const isPlayer = player && car === player.car;
+      ctx.fillStyle = isPlayer ? '#d77f69' : car.kind === 'traffic' ? '#ead8b2' : 'rgba(234,216,178,0.45)';
+      const cx = sx(car.x), cy = sz(car.z);
+      ctx.fillRect(cx - 2, cy - 2, 4, 4);
+      if (isPlayer) {
+        ctx.strokeStyle = '#ead8b2';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx - 3.5, cy - 3.5, 7, 7);
+      }
+    }
+    // The player on foot is a pale dot.
+    if (player && player.onFoot) {
+      ctx.fillStyle = '#ead8b2';
+      ctx.beginPath();
+      ctx.arc(sx(player.x), sz(player.z), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
     // Frame.
     ctx.strokeStyle = '#ead8b2';
     ctx.lineWidth = 2;
