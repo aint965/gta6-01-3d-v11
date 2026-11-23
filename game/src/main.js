@@ -1,6 +1,9 @@
 // Palkon Auto — Stage A: the city, the light and the camera.
 // Stage B adds the drive: four car profiles, traffic on lane loops,
 // working signals, pedestrians, headlights, entry and exit.
+// Stage C adds the story: missions 1-4 for Mara Venn.
+// Stage D closes the arc: missions 5-8 and the broadcast finale, and
+// Mara walks on foot instead of the camera sliding alone.
 // Boots the renderer, the minimap and the HUD, then runs the frame loop.
 // URL parameters stage a view without touching the code:
 //   ?preset=day|sunset|night   the light (1/2/3 or T in game)
@@ -70,6 +73,22 @@ const SHOTS = {
     eye: [-1000, 6, 470],
     target: [-1000, 4, 600],
   },
+  // Stage D: the finale in progress — the coupe parked at the broadcast
+  // tower in Pearl Marina, the hold step live with its marker beam. The
+  // chase camera frames the car from behind (it faces north, toward the
+  // tower) — dist and pitch are what the shot uses; eye/target seed the
+  // initial yaw.
+  finale: {
+    preset: 'day',
+    drive: true,
+    mission: 8,
+    finale: true,
+    car: { profile: 'coupe', x: -1200, z: -1320, heading: Math.PI },
+    dist: 24,
+    pitch: 0.28,
+    eye: [-1200, 7, -1290],
+    target: [-1200, 6, -1400],
+  },
 };
 
 window.__palkon = { errors: [], ready: false, shots: Object.keys(SHOTS) };
@@ -96,10 +115,10 @@ const camera = createCamera();
 const vehicles = createVehicleSystem(city);
 const traffic = createTraffic(city, vehicles);
 
-// The player walks or drives. On foot the camera orbits freely; in a car
+// The player walks or drives. On foot the camera follows Mara; in a car
 // it follows from behind and the same keys drive instead of walking.
 const player = {
-  x: 0, z: 200, heading: 0,
+  x: 200, z: 200, heading: 0,
   onFoot: true,
   car: null,
 };
@@ -108,10 +127,13 @@ const missions = createMissions({
   getPos: () => (player.car ? [player.car.x, player.car.z] : [player.x, player.z]),
   getHeading: () => (player.car ? player.car.heading : player.heading),
   now: () => simTime,
+  setPreset,
 });
 let headlightsOn = false;
 let camYawOffset = 0; // mouse drag while driving: look around, springs back
 let driving = false;
+let followOnFoot = false; // once Mara has walked, the camera stays with her
+const WALK_SPEED = 6; // metres per second on foot
 let simTime = 0; // simulation clock: drives the signal cycle and the tests
 
 const minimap = createMinimap(document.getElementById('minimap'), city);
@@ -151,6 +173,7 @@ function step(dt, held, pressed) {
         if (car) {
           player.car = car;
           player.onFoot = false;
+          followOnFoot = false;
           car.kind = 'player';
           driving = true;
           if (camera.dist > 40) camera.dist = 18;
@@ -161,7 +184,10 @@ function step(dt, held, pressed) {
         player.car.kind = 'parked';
         player.car = null;
         player.onFoot = true;
+        followOnFoot = true;
         driving = false;
+        if (camera.dist > 40) camera.dist = 18;
+        if (camera.pitch < 0.15) camera.pitch = 0.3;
       }
     }
     if (code === 'KeyH') headlightsOn = !headlightsOn;
@@ -170,12 +196,47 @@ function step(dt, held, pressed) {
     if (code === 'KeyX') missions.dropCargo();
   }
   if (player.onFoot) {
+    // Stage D: WASD walks Mara on the ground, relative to the camera, and
+    // the camera follows her. (As first written, WASD only slid the
+    // camera and Mara never moved — she even spawned in the canal at
+    // (0, 200).) The walk is blocked by buildings, street furniture, cars
+    // and water, the same collision the cars use, with an axis-separated
+    // slide along walls. Until she first walks, the camera keeps the
+    // opening overview instead of snapping to her.
     let fwd = 0, strafe = 0;
     if (held.has('KeyW') || held.has('ArrowUp')) fwd += 1;
     if (held.has('KeyS') || held.has('ArrowDown')) fwd -= 1;
     if (held.has('KeyD') || held.has('ArrowRight')) strafe += 1;
     if (held.has('KeyA') || held.has('ArrowLeft')) strafe -= 1;
-    camera.move(fwd, strafe, 30 * dt);
+    if (fwd || strafe) {
+      followOnFoot = true;
+      if (camera.dist > 40) {
+        camera.dist = 20;
+        if (camera.pitch < 0.3) camera.pitch = 0.3;
+      }
+      const f = camera.forward();
+      const r = camera.right();
+      let dx = f[0] * fwd + r[0] * strafe;
+      let dz = f[2] * fwd + r[2] * strafe;
+      const len = Math.hypot(dx, dz);
+      if (len > 0) {
+        dx = (dx / len) * WALK_SPEED * dt;
+        dz = (dz / len) * WALK_SPEED * dt;
+        player.heading = Math.atan2(dx, dz);
+        // A 1x1 probe against the vehicle collision grid: buildings,
+        // lamps, trees, other cars, water and the city edge.
+        const probe = { length: 1.0, width: 1.0, heading: 0 };
+        const nx = player.x + dx, nz = player.z + dz;
+        if (!vehicles.collidesAt(probe, nx, nz, null)) {
+          player.x = nx; player.z = nz;
+        } else if (!vehicles.collidesAt(probe, nx, player.z, null)) {
+          player.x = nx;
+        } else if (!vehicles.collidesAt(probe, player.x, nz, null)) {
+          player.z = nz;
+        }
+      }
+    }
+    if (followOnFoot) camera.target = [player.x, 10, player.z];
   } else if (player.car) {
     // The drive model takes throttle/brake/steer, not key codes.
     vehicles.driveCar(player.car, dt, {
@@ -219,7 +280,12 @@ if (shot) {
   }
   camera.place(shot.eye, shot.target);
   if (shot.drive) { camera.dist = shot.dist || 18; camera.pitch = shot.pitch !== undefined ? shot.pitch : 0.3; }
-  if (shot.mission) missions.accept(shot.mission);
+  if (shot.mission) {
+    // The finale shot jumps the story to its hold step (see
+    // missions.stageFinale); every other shot accepts the next mission.
+    if (shot.finale) missions.stageFinale();
+    else missions.accept(shot.mission);
+  }
 } else {
   setPreset(params.get('preset') || 'day');
   const cam = params.get('cam');
@@ -255,6 +321,17 @@ function queueDynamic(time) {
     });
     R.queueDynamic(R.dynMeshes.pedLegs, m, {
       tint: [0.16, 0.2, 0.24], shininess: 4,
+    });
+  }
+  // Stage D: Mara on foot — a coral-jacket figure with the same
+  // pedestrian meshes, so the walk is visible in the world.
+  if (player.onFoot) {
+    const m = R.model(player.x, vehicles.groundHeightAt(player.x, player.z), player.z, player.heading);
+    R.queueDynamic(R.dynMeshes.pedBody, m, {
+      tint: [0.84, 0.5, 0.41], shininess: 8,
+    });
+    R.queueDynamic(R.dynMeshes.pedLegs, m, {
+      tint: [0.08, 0.18, 0.22], shininess: 4,
     });
   }
   for (const inter of traffic.intersections) {
@@ -354,9 +431,12 @@ const game = {
     vehicles.reset();
     traffic.reset();
     missions.reset();
-    player.x = 0; player.z = 200; player.heading = 0;
+    // Stage D: Mara starts on the x = 200 street, not in the canal — the
+    // old (0, 200) spawn sat in the water at x = 0.
+    player.x = 200; player.z = 200; player.heading = 0;
     player.onFoot = true; player.car = null;
     driving = false;
+    followOnFoot = false;
     headlightsOn = false;
     simTime = 0;
   },
@@ -366,14 +446,23 @@ const game = {
   removeCar(car) { vehicles.removeCar(car); },
   enterCar(car) {
     player.car = car; player.onFoot = false; car.kind = 'player'; driving = true;
+    followOnFoot = false;
   },
-  exitCar() { player.car = null; player.onFoot = true; driving = false; },
+  exitCar() {
+    player.car = null; player.onFoot = true; driving = false;
+    followOnFoot = true;
+    if (camera.dist > 40) camera.dist = 18;
+    if (camera.pitch < 0.15) camera.pitch = 0.3;
+  },
   player() { return player; },
   step,
   setSignalsGreen,
   setSignalOverride(ix, iz, state) { traffic.setOverride(ix, iz, state); },
   clearSignalOverrides() { traffic.clearOverrides(); },
   setPreset,
+  preset() { return presetName; },
+  headlightsOn() { return headlightsOn; },
+  cameraTarget() { return [...camera.target]; },
   setHaze(on) { renderer.setHazeEnabled(on); },
   setHeadlightsOn(on) { headlightsOn = on; },
   setCamera(eye, target) { camera.place(eye, target); },
@@ -406,6 +495,7 @@ window.__palkon.state = () => ({
 window.__palkon.runDriveTest = () => tests.driveTest();
 window.__palkon.runHeadlightTest = (haze) => tests.headlightTest(haze);
 window.__palkon.runMissionTest = () => tests.missionTest();
+window.__palkon.runWalkTest = () => tests.walkTest();
 function resize() {
   renderer.resize(window.innerWidth, window.innerHeight);
 }
